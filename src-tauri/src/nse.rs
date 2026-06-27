@@ -5,6 +5,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::db::{TickRow, TickSender};
 
+use tracing::{info, error, warn};
+
 // ============================================================================
 // DATA STRUCTURES - Matching NSE API response format
 // ============================================================================
@@ -85,7 +87,7 @@ impl OptionStreamer {
                     let parsed: OptionChainMessage = match serde_json::from_str(&text) {
                         Ok(m) => m,
                         Err(e) => {
-                            eprintln!("⚠️ JSON parse error: {e}");
+                            warn!("⚠️ JSON parse error: {}", e);
                             continue;
                         }
                     };
@@ -110,14 +112,14 @@ impl OptionStreamer {
                     };
 
                     if self.tx.send(row).await.is_err() {
-                        eprintln!("DB writer channel closed; stopping stream.");
+                        info!("DB writer channel closed; stopping stream.");
                         break;
                     }
                 }
                 Ok(Message::Close(_)) => break,
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("❌ WebSocket error: {e}");
+                    error!("❌ WebSocket error: {}", e);
                     break;
                 }
             }

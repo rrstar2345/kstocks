@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
-use sqlx::{Pool, Sqlite, sqlite::SqlitePoolOptions, QueryBuilder};
+use sqlx::{Pool, Sqlite, QueryBuilder};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+// use std::path::Path;
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+use tracing::{info, error, warn};
 
 #[derive(Debug, Clone)]
 pub struct TickRow {
@@ -26,14 +30,22 @@ pub struct TickRow {
 pub type TickSender = mpsc::Sender<TickRow>;
 
 pub async fn init_db(db_path: &std::path::Path) -> Result<Pool<Sqlite>> {
-    let url = format!("sqlite://{}", db_path.display());
+    // let url = format!("sqlite://{}", db_path.display());
+    info!("Initialize db at: {}", db_path.display());
 
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .min_connections(1)
-        .acquire_timeout(Duration::from_secs(5))
-        .connect(&url)
-        .await?;
+    let connection_options = SqliteConnectOptions::new()
+    .filename(db_path)
+    .create_if_missing(true);
+    
+    let pool = SqlitePool::connect_with(connection_options).await?;
+    info!("Database connected/created successfully.");
+
+    // let pool = SqlitePoolOptions::new()
+    //     .max_connections(5)
+    //     .min_connections(1)
+    //     .acquire_timeout(Duration::from_secs(5))
+    //     .connect(&url)
+    //     .await?;
 
     // Performance PRAGMAs for ingestion.
     // If you want safer durability, set synchronous to FULL.
@@ -129,7 +141,7 @@ pub fn start_tick_writer(
 
             if !buf.is_empty() {
                 if let Err(e) = insert_batch(&pool, &buf).await {
-                    eprintln!("❌ DB insert batch failed: {e}");
+                    error!("❌ DB insert batch failed: {}", e);
                 }
                 buf.clear();
             }
@@ -144,6 +156,7 @@ async fn insert_batch(pool: &Pool<Sqlite>, rows: &[TickRow]) -> Result<()> {
     // SQLite supports VALUES (...), (...), ...
     // sqlx requires binding parameters; we build a query with placeholders.
     if rows.is_empty() {
+        warn!("No rows to insert");
         return Ok(());
     }
 
