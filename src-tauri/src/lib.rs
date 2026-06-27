@@ -5,7 +5,7 @@ pub mod settings;
 use db::{init_db, start_tick_writer};
 use settings::{setup_app_folders};
 use nse::OptionStreamer;
-use chrono::{Local, Datelike, Duration};
+use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,6 +14,15 @@ use std::collections::HashMap;
 use tracing::{info, error, warn};
 
 type ActiveStreams = Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(crate = "serde")]
+pub struct ExpiryResponse {
+    #[serde(rename = "expiryDates")]
+    pub expiry_dates: Vec<String>,
+    #[serde(rename = "strikePrice")]
+    pub strike_price: Vec<String>,
+}
 
 // Store this in your app state (requires Tauri state management)
 // For now, a simpler approach: check if a symbol is already streaming
@@ -24,7 +33,42 @@ lazy_static::lazy_static! {
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-async fn store_ticks(symbol: String) -> Result<String, String> {
+async fn fetch_expiry_dates(symbol: String) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "https://www.nseindia.com/api/option-chain-contract-info?symbol={}",
+        symbol
+    );
+
+    // info!("Fetching expiry dates info from: {}", url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch expiry dates: {}", e))?;
+
+    let data: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse expiry dates: {}", e))?;
+
+    // info!("Returned data: {:?}", data);
+
+    // Create response with snake_case keys for the frontend
+    let result = serde_json::json!({
+        "expiry_dates": data.get("expiryDates").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+        "strike_price": data.get("strikePrice").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+    });
+
+    Ok(result)
+}
+
+#[tauri::command]
+async fn store_ticks(symbol: String, expiry_date: String) -> Result<String, String> {
+    info!("store_ticks called with symbol: {}, expiry_date: {}", symbol, expiry_date);
+
     let mut streams = ACTIVE_STREAMS.write().await;
     
     // Check if already streaming
@@ -53,12 +97,11 @@ async fn store_ticks(symbol: String) -> Result<String, String> {
         return Err(format!("Invalid symbol: {}", symbol));
     }
 
-    let expiry = get_next_thursday_expiry();
     let symbol_clone = symbol.clone();
     // let symbol_for_cleanup = symbol.clone();
 
     let handle = tokio::spawn(async move {
-        let streamer = OptionStreamer::new(symbol_clone.clone(), expiry, tx);
+        let streamer = OptionStreamer::new(symbol_clone.clone(), expiry_date, tx);
         match streamer.start().await {
             Ok(_) => info!("✅ Stream completed for {}", symbol_clone),
             Err(e) => error!("❌ Stream error for {}: {}", symbol_clone, e),
@@ -74,20 +117,6 @@ async fn store_ticks(symbol: String) -> Result<String, String> {
     Ok(format!("Data fetch started for {}", symbol))
 }
 
-
-fn get_next_thursday_expiry() -> String {
-    let mut date = Local::now().date_naive();
-    
-    // Move to next day and find the first Thursday
-    date = date + Duration::days(1);
-    while date.weekday() != chrono::Weekday::Thu {
-        date = date + Duration::days(1);
-    }
-    
-    // Format as DD-MMM-YYYY (e.g., "27-Jun-2026")
-    date.format("%d-%b-%Y").to_string()
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
@@ -99,7 +128,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![store_ticks])
+        .invoke_handler(tauri::generate_handler![fetch_expiry_dates, store_ticks])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

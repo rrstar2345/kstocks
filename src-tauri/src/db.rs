@@ -30,15 +30,14 @@ pub struct TickRow {
 pub type TickSender = mpsc::Sender<TickRow>;
 
 pub async fn init_db(db_path: &std::path::Path) -> Result<Pool<Sqlite>> {
-    // let url = format!("sqlite://{}", db_path.display());
-    info!("Initialize db at: {}", db_path.display());
+    // info!("Initialize db at: {}", db_path.display());
 
     let connection_options = SqliteConnectOptions::new()
     .filename(db_path)
     .create_if_missing(true);
     
     let pool = SqlitePool::connect_with(connection_options).await?;
-    info!("Database connected/created successfully.");
+    // info!("Database connected/created successfully.");
 
     // let pool = SqlitePoolOptions::new()
     //     .max_connections(5)
@@ -200,6 +199,8 @@ async fn insert_batch(pool: &Pool<Sqlite>, rows: &[TickRow]) -> Result<()> {
 
     if res.rows_affected() == 0 {
         return Err(anyhow!("insert_batch inserted 0 rows"));
+    } else {
+        info!("insert_batch inserted {} rows", res.rows_affected());
     }
     Ok(())
 }
