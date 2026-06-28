@@ -23,11 +23,18 @@
 
 .container {
   margin: 0;
-  padding-top: 10vh;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  min-height: 100vh;
+}
+
+.container.landing {
+  padding-top: 10vh;
+}
+
+.container.detail {
+  padding-top: 60px;
 }
 
 .logo {
@@ -44,6 +51,9 @@
 .row {
   display: flex;
   justify-content: center;
+  gap: 10px;
+  margin: 20px 0;
+  flex-wrap: wrap;
 }
 
 a {
@@ -58,6 +68,7 @@ a:hover {
 
 h1 {
   text-align: center;
+  margin-bottom: 30px;
 }
 
 input,
@@ -81,9 +92,15 @@ button {
 button:hover {
   border-color: #396cd8;
 }
+
 button:active {
   border-color: #396cd8;
   background-color: #e8e8e8;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 input,
@@ -91,8 +108,110 @@ button {
   outline: none;
 }
 
+select {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: #0f0f0f;
+  background-color: #ffffff;
+  transition: border-color 0.25s;
+  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 #greet-input {
   margin-right: 5px;
+}
+
+/* Landing Page - Cards Grid */
+.cards-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.index-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+}
+
+.index-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  border-color: #396cd8;
+  transform: translateY(-4px);
+}
+
+.card-header {
+  margin-bottom: 15px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 10px;
+}
+
+.card-header h3 {
+  margin: 0;
+  font-size: 1.2em;
+  color: #0f0f0f;
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.price-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.price {
+  font-size: 1.5em;
+  font-weight: bold;
+  color: #0f0f0f;
+}
+
+.change {
+  font-size: 1em;
+  font-weight: 500;
+}
+
+.loading,
+.error {
+  text-align: center;
+  padding: 40px 20px;
+  font-size: 1.1em;
+}
+
+.error {
+  color: #e74c3c;
+}
+
+.loading {
+  color: #3498db;
+}
+
+/* Back Button */
+.back-button {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  padding: 0.5em 1em;
+  font-size: 0.9em;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -106,12 +225,51 @@ button {
   }
 
   input,
-  button {
+  button,
+  select {
     color: #ffffff;
     background-color: #0f0f0f98;
   }
+
   button:active {
     background-color: #0f0f0f69;
+  }
+
+  .index-card {
+    background: #1a1a1a;
+    color: #f6f6f6;
+  }
+
+  .index-card:hover {
+    border-color: #24c8db;
+  }
+
+  .card-header {
+    border-bottom-color: #444;
+  }
+
+  .card-header h3 {
+    color: #f6f6f6;
+  }
+
+  .price {
+    color: #f6f6f6;
+  }
+}
+
+@media (max-width: 768px) {
+  .cards-container {
+    grid-template-columns: 1fr;
+  }
+
+  .row {
+    flex-direction: column;
+  }
+
+  input,
+  button,
+  select {
+    width: 100%;
   }
 }
 

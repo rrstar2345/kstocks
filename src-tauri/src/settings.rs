@@ -2,6 +2,8 @@ use std::fs;
 use std::io;
 use std::path::{PathBuf};
 use std::env;
+use serde::{Deserialize, Serialize};
+use tracing::{info, error};
 
 pub struct AppPaths {
     pub root: PathBuf,
@@ -16,6 +18,125 @@ pub struct AppPaths {
 }
 
 pub const APP_NAME: &str = "kstocks";
+
+// ============================================================================
+// CONFIGURATION STRUCTURES
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApiParam {
+    pub key: String,          // actual parameter name in URL (e.g., "index")
+    pub value: String,        // default/static value or placeholder name
+    pub dynamic: bool,        // is this parameter dynamic (needs runtime replacement)
+    pub param_key: Option<String>, // if dynamic, which config key to use (e.g., "indices_short_name")
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApiEndpoint {
+    pub base: String,
+    pub params: Option<Vec<ApiParam>>,
+    pub desc: String,
+    pub wss: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemConfig {
+    pub time_range_flags: Vec<String>,
+    pub market_status_url: ApiEndpoint,
+    pub option_info: ApiEndpoint,
+    pub option_ticks: ApiEndpoint,
+    pub indices_info: ApiEndpoint,
+    pub index_info: ApiEndpoint,
+    pub index_chart: ApiEndpoint,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserConfig {
+    pub valid_symbols: Vec<String>,
+    pub default_symbol: String,
+    pub index_time_range: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub system: SystemConfig,
+    pub user: UserConfig,
+}
+
+impl AppConfig {
+    pub fn default() -> Self {
+        AppConfig {
+            system: SystemConfig {
+                time_range_flags: vec![
+                    "1D".to_string(), "1M".to_string(), "3M".to_string(), "6M".to_string(),
+                    "1Y".to_string(), "5Y".to_string(), "10Y".to_string(), "15Y".to_string(),
+                    "20Y".to_string(), "25Y".to_string(), "30Y".to_string(),
+                ],
+                market_status_url: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/marketStatus".to_string(),
+                    params: None,
+                    desc: "Gets the current status of the market close or open".to_string(),
+                    wss: false,
+                },
+                option_info: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/option-chain-contract-info".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "symbol".to_string(), value: "FINNIFTY".to_string(), dynamic: true, param_key: Some("fno_symbol".to_string()) },
+                    ]),
+                    desc: "Fetch the expiry dates and strike prices for the index".to_string(),
+                    wss: false,
+                },
+                option_ticks: ApiEndpoint {
+                    base: "wss://streamer.nseindia.com/streams/fo/mbp".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "symbol".to_string(), value: "FINNIFTY".to_string(), dynamic: true, param_key: Some("fno_symbol".to_string()) },
+                        ApiParam { key: "expiry".to_string(), value: "30-Jun-2026".to_string(), dynamic: true, param_key: Some("expiry_date".to_string()) },
+                    ]),
+                    desc: "Websocket to get CE and PE price movements".to_string(),
+                    wss: true,
+                },
+                indices_info: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/NextApi/apiClient/indexTrackerApi".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "functionName".to_string(), value: "getAllIndices".to_string(), dynamic: false, param_key: None },
+                    ]),
+                    desc: "Get F&O index name, underlying index names, short and long names".to_string(),
+                    wss: false,
+                },
+                index_info: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/NextApi/apiClient/indexTrackerApi".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "functionName".to_string(), value: "getIndexData".to_string(), dynamic: false, param_key: None },
+                        ApiParam { key: "index".to_string(), value: "NIFTY 50".to_string(), dynamic: true, param_key: Some("index_display_name".to_string()) },
+                    ]),
+                    desc: "Get high level status for the index".to_string(),
+                    wss: false,
+                },
+                index_chart: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/NextApi/apiClient/indexTrackerApi".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "functionName".to_string(), value: "getIndexChart".to_string(), dynamic: false, param_key: None },
+                        ApiParam { key: "index".to_string(), value: "NIFTY 50".to_string(), dynamic: true, param_key: Some("index_display_name".to_string()) },
+                        ApiParam { key: "flag".to_string(), value: "1M".to_string(), dynamic: true, param_key: Some("time_range_flag".to_string()) },
+                    ]),
+                    desc: "Get index price movements for a specific time range flag".to_string(),
+                    wss: false,
+                },
+            },
+            user: UserConfig {
+                valid_symbols: vec![
+                    "NIFTY".to_string(),
+                    "NIFTYNXT50".to_string(),
+                    "FINNIFTY".to_string(),
+                    "BANKNIFTY".to_string(),
+                    "MIDCPNIFTY".to_string(),
+                ],
+                default_symbol: "NIFTY".to_string(),
+                index_time_range: "1M".to_string(),
+            },
+        }
+    }
+}
 
 pub fn setup_app_folders() -> io::Result<AppPaths> {
 
@@ -54,4 +175,37 @@ pub fn setup_app_folders() -> io::Result<AppPaths> {
     fs::create_dir_all(&paths.chats_dir)?;
     fs::create_dir_all(&paths.db)?;
     Ok(paths)
+}
+
+pub fn load_or_create_config(settings_file: &PathBuf) -> io::Result<AppConfig> {
+    // Check if settings file exists
+    if settings_file.exists() {
+        match fs::read_to_string(settings_file) {
+            Ok(content) => {
+                match serde_json::from_str::<AppConfig>(&content) {
+                    Ok(config) => {
+                        info!("✅ Loaded existing configuration from: {}", settings_file.display());
+                        return Ok(config);
+                    }
+                    Err(e) => {
+                        error!("⚠️ Failed to parse settings.json: {}. Using defaults.", e);
+                        // Fall through to create default
+                    }
+                }
+            }
+            Err(e) => {
+                error!("⚠️ Failed to read settings.json: {}. Using defaults.", e);
+                // Fall through to create default
+            }
+        }
+    }
+
+    // Create default config and save it
+    let default_config = AppConfig::default();
+    let config_json = serde_json::to_string_pretty(&default_config)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+
+    fs::write(settings_file, &config_json)?;
+    info!("✅ Created default configuration at: {}", settings_file.display());
+    Ok(default_config)
 }
