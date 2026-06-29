@@ -21,6 +21,7 @@ interface IndexCard {
   change: number;
   change_percent: number;
   is_positive: boolean;
+  dissemination_time: string;
 }
 
 // interface SymbolInfo {
@@ -46,6 +47,24 @@ function App() {
   useEffect(() => {
     if (currentPage === "landing") {
       loadIndexCards();
+      
+      // Start the streamer when landing page is active
+      invoke("start_streamer").catch(error => {
+        console.error("Failed to start streamer:", error);
+      });
+      
+      // Poll for updates every 1 second to get streaming data
+      const interval = setInterval(() => {
+        loadIndexCards();
+      }, 1000);
+      
+      return () => {
+        clearInterval(interval);
+        // Stop the streamer when leaving landing page
+        invoke("stop_streamer").catch(error => {
+          console.error("Failed to stop streamer:", error);
+        });
+      };
     }
   }, [currentPage]);
 
@@ -117,7 +136,10 @@ function App() {
   }
 
   const formatPrice = (value: number) => {
-    return value.toFixed(2);
+    return value.toLocaleString('en-IN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
   };
 
   const getArrow = (isPositive: boolean) => {
@@ -158,6 +180,9 @@ function App() {
                       {getArrow(card.is_positive)} {formatPrice(Math.abs(card.change))} (
                       {formatPrice(card.change_percent)}%)
                     </span>
+                  </div>
+                  <div className="timestamp">
+                    <small>Updated: {card.dissemination_time}</small>
                   </div>
                 </div>
               </div>

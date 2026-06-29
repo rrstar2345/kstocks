@@ -2,11 +2,13 @@ pub mod option_streamer;
 pub mod db;
 pub mod settings;
 pub mod index_tracker;
+pub mod indices_streamer;
 
 use db::{init_db, start_tick_writer};
 use settings::{setup_app_folders, load_or_create_config, AppConfig};
 use option_streamer::OptionStreamer;
-use index_tracker::{get_filtered_symbols, get_all_index_stats, IndexCard};
+use index_tracker::{get_filtered_symbols};
+use indices_streamer::{get_index_cards as get_streamed_index_cards, start_indices_streamer, stop_indices_streamer, IndexCard};
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
@@ -185,10 +187,24 @@ async fn get_symbol_info() -> Result<HashMap<String, serde_json::Value>, String>
 #[tauri::command]
 async fn get_index_cards() -> Result<Vec<IndexCard>, String> {
     let config = get_config()?;
-
-    match get_all_index_stats(&config).await {
+    match get_streamed_index_cards(&config).await {
         Ok(cards) => Ok(cards),
-        Err(e) => Err(format!("Failed to fetch index stats: {}", e))
+        Err(e) => Err(format!("Failed to fetch index cards: {}", e))
+    }
+}
+
+#[tauri::command]
+async fn stop_streamer() -> Result<String, String> {
+    stop_indices_streamer().await;
+    Ok("Indices streamer stopped".to_string())
+}
+
+#[tauri::command]
+async fn start_streamer() -> Result<String, String> {
+    let config = get_config()?;
+    match start_indices_streamer(&config).await {
+        Ok(_) => Ok("Indices streamer started".to_string()),
+        Err(e) => Err(format!("Failed to start indices streamer: {}", e))
     }
 }
 
@@ -202,11 +218,31 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|_app| {
+            // Start the indices streamer on app launch using tauri::async_runtime
+            tauri::async_runtime::spawn_blocking(|| {
+                tauri::async_runtime::block_on(async {
+                    match get_config() {
+                        Ok(config) => {
+                            match start_indices_streamer(&config).await {
+                                Ok(_) => info!("✅ Indices streamer started successfully"),
+                                Err(e) => eprintln!("❌ Failed to start indices streamer: {}", e),
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to load config: {}", e),
+                    }
+                })
+            });
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             fetch_expiry_dates, 
             store_ticks,
             get_symbol_info,
             get_index_cards,
+            start_streamer,
+            stop_streamer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

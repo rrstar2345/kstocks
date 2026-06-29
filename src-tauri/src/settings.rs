@@ -48,6 +48,7 @@ pub struct SystemConfig {
     pub indices_info: ApiEndpoint,
     pub index_info: ApiEndpoint,
     pub index_chart: ApiEndpoint,
+    pub indices_streamer: ApiEndpoint,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -121,6 +122,12 @@ impl AppConfig {
                     ]),
                     desc: "Get index price movements for a specific time range flag".to_string(),
                     wss: false,
+                },
+                indices_streamer: ApiEndpoint {
+                    base: "wss://streamer.nseindia.com/streams/indices/high/windices".to_string(),
+                    params: None,
+                    desc: "WebSocket stream for real-time index data".to_string(),
+                    wss: true,
                 },
             },
             user: UserConfig {

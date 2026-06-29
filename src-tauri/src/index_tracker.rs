@@ -93,6 +93,7 @@ pub struct SymbolMapping {
     pub fno_symbol: String,
     pub display_name: String,
     pub long_name: String,
+    pub short_name: String,
 }
 
 // ============================================================================
@@ -187,6 +188,7 @@ pub async fn get_filtered_symbols(config: &AppConfig) -> Result<HashMap<String, 
                         fno_symbol: fno_name.clone(),
                         display_name: index_display_name.clone(),
                         long_name: info.indices_long_name.clone(),
+                        short_name: info.indices_short_name.clone(),
                     },
                 );
                 info!("✅ Added symbol: {} -> {} ({})", fno_name, index_display_name, info.indices_long_name);
