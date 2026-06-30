@@ -1,19 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import IndexChart from "./components/IndexChart";
 
 type FetchStatus = "idle" | "loading" | "success" | "error";
-type Page = "landing" | "detail";
 
 interface StatusMessage {
   state: FetchStatus;
   message: string;
 }
 
-interface ExpiryResponse {
-  expiry_dates: string[];
-  strike_price: string[];
-}
+// interface ExpiryResponse {
+//   expiry_dates: string[];
+//   strike_price: string[];
+// }
 
 interface IndexCard {
   index_name: string;
@@ -24,49 +24,42 @@ interface IndexCard {
   dissemination_time: string;
 }
 
-// interface SymbolInfo {
-//   fno_index_name?: string;
-//   indices_long_name: string;
-//   indices_short_name: string;
-// }
-
 function App() {
-  const [currentPage, setCurrentPage] = useState<Page>("landing");
-  const [symbol, setSymbol] = useState("NIFTY");
-  const [expiryDates, setExpiryDates] = useState<string[]>([]);
+  const [selectedCardIndex, setSelectedCardIndex] = useState<number>(0);
+  const [expiryDates] = useState<string[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState("");
-  const [expiryLoading, setExpiryLoading] = useState(false);
+  const [expiryLoading] = useState(false);
   const [indexCards, setIndexCards] = useState<IndexCard[]>([]);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [status, setStatus] = useState<StatusMessage>({
     state: "idle",
     message: "",
   });
+  const [selectedTimeRange, setSelectedTimeRange] = useState<string>("1M");
+  const cardsContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load index cards on landing page mount
+  // Load index cards on component mount
   useEffect(() => {
-    if (currentPage === "landing") {
+    loadIndexCards();
+
+    // Start the streamer
+    invoke("start_streamer").catch((error) => {
+      console.error("Failed to start streamer:", error);
+    });
+
+    // Poll for updates every 1 second to get streaming data
+    const interval = setInterval(() => {
       loadIndexCards();
-      
-      // Start the streamer when landing page is active
-      invoke("start_streamer").catch(error => {
-        console.error("Failed to start streamer:", error);
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      // Stop the streamer when unmounting
+      invoke("stop_streamer").catch((error) => {
+        console.error("Failed to stop streamer:", error);
       });
-      
-      // Poll for updates every 1 second to get streaming data
-      const interval = setInterval(() => {
-        loadIndexCards();
-      }, 1000);
-      
-      return () => {
-        clearInterval(interval);
-        // Stop the streamer when leaving landing page
-        invoke("stop_streamer").catch(error => {
-          console.error("Failed to stop streamer:", error);
-        });
-      };
-    }
-  }, [currentPage]);
+    };
+  }, []);
 
   const loadIndexCards = async () => {
     setCardsLoading(true);
@@ -85,45 +78,52 @@ function App() {
     }
   };
 
-  // Fetch expiry dates when symbol changes
-  useEffect(() => {
-    if (currentPage === "detail") {
-      const fetchExpiryDates = async () => {
-        setExpiryLoading(true);
-        try {
-          const data = await invoke<ExpiryResponse>("fetch_expiry_dates", {
-            symbol,
-          });
-          console.log("Received data from backend:", data);
-          setExpiryDates(data.expiry_dates);
-          if (data.expiry_dates.length > 0) {
-            setSelectedExpiry(data.expiry_dates[0]);
-            console.log("Auto-selected first expiry:", data.expiry_dates[0]);
-          }
-        } catch (error) {
-          console.error("Failed to fetch expiry dates:", error);
-          setExpiryDates([]);
-          setSelectedExpiry("");
-        } finally {
-          setExpiryLoading(false);
-        }
-      };
-
-      fetchExpiryDates();
-    }
-  }, [symbol, currentPage]);
-
-  const handleCardClick = (cardSymbol: string) => {
-    setSymbol(cardSymbol);
-    setCurrentPage("detail");
+  const handleCardClick = (index: number) => {
+    setSelectedCardIndex(index);
+    setSelectedTimeRange("1M"); // Reset to default time range
   };
 
+  // const handlePrevCard = () => {
+  //   setSelectedCardIndex((prev) => (prev === 0 ? indexCards.length - 1 : prev - 1));
+  // };
+
+  // const handleNextCard = () => {
+  //   setSelectedCardIndex((prev) => (prev === indexCards.length - 1 ? 0 : prev + 1));
+  // };
+
+  const scrollCards = (direction: "left" | "right") => {
+    if (!cardsContainerRef.current) return;
+
+    const scrollAmount = 300;
+    const current = cardsContainerRef.current.scrollLeft;
+
+    if (direction === "left") {
+      cardsContainerRef.current.scrollLeft = current - scrollAmount;
+    } else {
+      cardsContainerRef.current.scrollLeft = current + scrollAmount;
+    }
+  };
+
+  const canScrollLeft = cardsContainerRef.current
+    ? cardsContainerRef.current.scrollLeft > 0
+    : false;
+
+  const canScrollRight = cardsContainerRef.current
+    ? cardsContainerRef.current.scrollLeft <
+      cardsContainerRef.current.scrollWidth -
+        cardsContainerRef.current.clientWidth -
+        10
+    : false;
+
   async function fetch_data() {
+    const selectedCard = indexCards[selectedCardIndex];
+    if (!selectedCard) return;
+
     setStatus({ state: "loading", message: "Starting data fetch..." });
 
     try {
       const result = await invoke<string>("store_ticks", {
-        symbol,
+        symbol: selectedCard.index_name,
         expiryDate: selectedExpiry,
       });
       setStatus({ state: "success", message: result });
@@ -136,7 +136,7 @@ function App() {
   }
 
   const formatPrice = (value: number) => {
-    return value.toLocaleString('en-IN', {
+    return value.toLocaleString("en-IN", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
@@ -150,34 +150,57 @@ function App() {
     return isPositive ? "#27ae60" : "#e74c3c";
   };
 
-  if (currentPage === "landing") {
-    return (
-      <main className="container landing">
-        <h1>KSTOCKS</h1>
-        
-        <div className="cards-container">
+  const selectedCard = indexCards[selectedCardIndex];
+
+  return (
+    <main className="container landing">
+      <h1>KSTOCKS</h1>
+
+      {/* Horizontal Card Carousel */}
+      <div className="cards-wrapper">
+        <button
+          className="cards-navigation-button"
+          onClick={() => scrollCards("left")}
+          disabled={!canScrollLeft && selectedCardIndex === 0}
+        >
+          ‹
+        </button>
+
+        <div className="cards-container" ref={cardsContainerRef}>
           {cardsLoading ? (
             <div className="loading">Loading index cards...</div>
           ) : indexCards.length === 0 ? (
             <div className="error">No cards loaded</div>
           ) : (
-            indexCards.map((card) => (
+            indexCards.map((card, index) => (
               <div
                 key={card.index_name}
-                className="index-card"
-                onClick={() => handleCardClick(card.index_name)}
+                className={`index-card ${
+                  index === selectedCardIndex ? "active" : ""
+                }`}
+                onClick={() => handleCardClick(index)}
+                style={{
+                  opacity: index === selectedCardIndex ? 1 : 0.7,
+                  transform:
+                    index === selectedCardIndex ? "scale(1.05)" : "scale(1)",
+                  borderColor:
+                    index === selectedCardIndex ? "#396cd8" : "transparent",
+                }}
               >
                 <div className="card-header">
                   <h3>{card.index_name}</h3>
                 </div>
                 <div className="card-body">
                   <div className="price-row">
-                    <span className="price">{formatPrice(card.last_price)}</span>
+                    <span className="price">
+                      {formatPrice(card.last_price)}
+                    </span>
                     <span
                       className="change"
                       style={{ color: getChangeColor(card.is_positive) }}
                     >
-                      {getArrow(card.is_positive)} {formatPrice(Math.abs(card.change))} (
+                      {getArrow(card.is_positive)}{" "}
+                      {formatPrice(Math.abs(card.change))} (
                       {formatPrice(card.change_percent)}%)
                     </span>
                   </div>
@@ -190,81 +213,126 @@ function App() {
           )}
         </div>
 
-        {status.state !== "idle" && (
-          <div className={`status-box status-${status.state}`}>
-            <p>Status: {status.message}</p>
-          </div>
-        )}
-      </main>
-    );
-  }
-
-  return (
-    <main className="container detail">
-      <button className="back-button" onClick={() => setCurrentPage("landing")}>
-        ← Back to Landing
-      </button>
-
-      <h1>Options Trading - {symbol}</h1>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          fetch_data();
-        }}
-      >
-        <select
-          id="symb"
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          disabled={status.state === "loading" || expiryLoading}
-        >
-          <option value="NIFTY">NIFTY 50</option>
-          <option value="NIFTYNXT50">NIFTY Next 50</option>
-          <option value="FINNIFTY">FIN NIFTY</option>
-          <option value="BANKNIFTY">BANK NIFTY</option>
-          <option value="MIDCPNIFTY">MIDCAP NIFTY</option>
-        </select>
-
-        <select
-          id="expiry"
-          value={selectedExpiry}
-          onChange={(e) => setSelectedExpiry(e.target.value)}
-          disabled={
-            status.state === "loading" || expiryLoading || expiryDates.length === 0
-          }
-        >
-          <option value="">
-            {expiryLoading ? "Loading expiry dates..." : "Select Expiry Date"}
-          </option>
-          {expiryDates.map((date) => (
-            <option key={date} value={date}>
-              {date}
-            </option>
-          ))}
-        </select>
-
         <button
-          type="submit"
-          disabled={
-            status.state === "loading" || !selectedExpiry || expiryLoading
-          }
+          className="cards-navigation-button"
+          onClick={() => scrollCards("right")}
+          disabled={!canScrollRight && selectedCardIndex === indexCards.length - 1}
         >
-          {status.state === "loading" ? "Fetching..." : "Fetch"}
+          ›
         </button>
-      </form>
-
-      <p>
-        Selected Symbol: <strong>{symbol}</strong>
-      </p>
-      <p>
-        Selected Expiry: <strong>{selectedExpiry || "Loading..."}</strong>
-      </p>
-
-      <div className={`status-box status-${status.state}`}>
-        <p>Status: {status.message}</p>
       </div>
+
+      {/* Detail Section */}
+      {selectedCard && (
+        <div className="detail-section">
+          <h2>{selectedCard.index_name} Details</h2>
+
+          {/* Time Range Selector */}
+          <div className="time-range-selector">
+            {[
+              "1D", "1M", "3M", "6M", "1Y", "5Y", "10Y", "15Y", "20Y", "25Y",
+              "30Y",
+            ].map((flag) => (
+              <button
+                key={flag}
+                className={`time-range-button ${
+                  selectedTimeRange === flag ? "active" : ""
+                }`}
+                onClick={() => setSelectedTimeRange(flag)}
+              >
+                {flag}
+              </button>
+            ))}
+          </div>
+
+          {/* Insights */}
+          <div className="insights-container">
+            <div className="insight-item">
+              <div className="insight-label">Current Price</div>
+              <div className="insight-value">
+                {formatPrice(selectedCard.last_price)}
+              </div>
+            </div>
+            <div className="insight-item">
+              <div className="insight-label">Change</div>
+              <div
+                className="insight-value"
+                style={{ color: getChangeColor(selectedCard.is_positive) }}
+              >
+                {getArrow(selectedCard.is_positive)}{" "}
+                {formatPrice(Math.abs(selectedCard.change))}
+              </div>
+            </div>
+            <div className="insight-item">
+              <div className="insight-label">Change %</div>
+              <div
+                className="insight-value"
+                style={{ color: getChangeColor(selectedCard.is_positive) }}
+              >
+                {formatPrice(selectedCard.change_percent)}%
+              </div>
+            </div>
+            <div className="insight-item">
+              <div className="insight-label">Updated</div>
+              <div className="insight-value" style={{ fontSize: "0.9em" }}>
+                {selectedCard.dissemination_time}
+              </div>
+            </div>
+          </div>
+
+          {/* Chart */}
+          <IndexChart
+            index_display_name={selectedCard.index_name}
+            time_range_flag={selectedTimeRange}
+          />
+        </div>
+      )}
+
+      {/* Options Fetch Section */}
+      {selectedCard && (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            fetch_data();
+          }}
+        >
+          <select
+            id="expiry"
+            value={selectedExpiry}
+            onChange={(e) => setSelectedExpiry(e.target.value)}
+            disabled={
+              status.state === "loading" ||
+              expiryLoading ||
+              expiryDates.length === 0
+            }
+          >
+            <option value="">
+              {expiryLoading ? "Loading expiry dates..." : "Select Expiry Date"}
+            </option>
+            {expiryDates.map((date) => (
+              <option key={date} value={date}>
+                {date}
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="submit"
+            disabled={
+              status.state === "loading" || !selectedExpiry || expiryLoading
+            }
+          >
+            {status.state === "loading" ? "Fetching..." : "Fetch Options Data"}
+          </button>
+        </form>
+      )}
+
+      {status.state !== "idle" && (
+        <div className={`status-box status-${status.state}`}>
+          <p>Status: {status.message}</p>
+        </div>
+      )}
     </main>
   );
 }

@@ -42,12 +42,14 @@ pub struct ApiEndpoint {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SystemConfig {
     pub time_range_flags: Vec<String>,
+    pub index_chart_refresh_interval_seconds: u64,
     pub market_status_url: ApiEndpoint,
     pub option_info: ApiEndpoint,
     pub option_ticks: ApiEndpoint,
     pub indices_info: ApiEndpoint,
     pub index_info: ApiEndpoint,
     pub index_chart: ApiEndpoint,
+    pub historic_index_chart: ApiEndpoint,
     pub indices_streamer: ApiEndpoint,
 }
 
@@ -55,7 +57,7 @@ pub struct SystemConfig {
 pub struct UserConfig {
     pub valid_symbols: Vec<String>,
     pub default_symbol: String,
-    pub index_time_range: String,
+    pub default_time_range_flag: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -73,6 +75,7 @@ impl AppConfig {
                     "1Y".to_string(), "5Y".to_string(), "10Y".to_string(), "15Y".to_string(),
                     "20Y".to_string(), "25Y".to_string(), "30Y".to_string(),
                 ],
+                index_chart_refresh_interval_seconds: 15,
                 market_status_url: ApiEndpoint {
                     base: "https://www.nseindia.com/api/marketStatus".to_string(),
                     params: None,
@@ -118,9 +121,19 @@ impl AppConfig {
                     params: Some(vec![
                         ApiParam { key: "functionName".to_string(), value: "getIndexChart".to_string(), dynamic: false, param_key: None },
                         ApiParam { key: "index".to_string(), value: "NIFTY 50".to_string(), dynamic: true, param_key: Some("index_display_name".to_string()) },
+                        ApiParam { key: "flag".to_string(), value: "1D".to_string(), dynamic: true, param_key: Some("time_range_flag".to_string()) },
+                    ]),
+                    desc: "Get index price movements for 1D flag".to_string(),
+                    wss: false,
+                },
+                historic_index_chart: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/NextApi/apiClient/historicalGraph".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "functionName".to_string(), value: "getIndexChart".to_string(), dynamic: false, param_key: None },
+                        ApiParam { key: "index".to_string(), value: "NIFTY 50".to_string(), dynamic: true, param_key: Some("index_display_name".to_string()) },
                         ApiParam { key: "flag".to_string(), value: "1M".to_string(), dynamic: true, param_key: Some("time_range_flag".to_string()) },
                     ]),
-                    desc: "Get index price movements for a specific time range flag".to_string(),
+                    desc: "Get historic index price movements for a specific time range flag".to_string(),
                     wss: false,
                 },
                 indices_streamer: ApiEndpoint {
@@ -139,7 +152,7 @@ impl AppConfig {
                     "MIDCPNIFTY".to_string(),
                 ],
                 default_symbol: "NIFTY".to_string(),
-                index_time_range: "1M".to_string(),
+                default_time_range_flag: "1M".to_string(),
             },
         }
     }

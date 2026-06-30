@@ -3,11 +3,13 @@ pub mod db;
 pub mod settings;
 pub mod index_tracker;
 pub mod indices_streamer;
+pub mod index_chart;
 
 use db::{init_db, start_tick_writer};
 use settings::{setup_app_folders, load_or_create_config, AppConfig};
 use option_streamer::OptionStreamer;
 use index_tracker::{get_filtered_symbols};
+use index_chart::{fetch_index_chart, ChartDataPoint};
 use indices_streamer::{get_index_cards as get_streamed_index_cards, start_indices_streamer, stop_indices_streamer, IndexCard};
 use serde::{Deserialize, Serialize};
 
@@ -208,6 +210,20 @@ async fn start_streamer() -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn get_index_chart_data(
+    #[allow(non_snake_case)]
+    index_display_name: String,
+    #[allow(non_snake_case)]
+    time_range_flag: String,
+) -> Result<Vec<ChartDataPoint>, String> {
+    let config = get_config()?;
+    match fetch_index_chart(&index_display_name, &time_range_flag, &config).await {
+        Ok(data) => Ok(data),
+        Err(e) => Err(format!("Failed to fetch chart data: {}", e)),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -243,6 +259,7 @@ pub fn run() {
             get_index_cards,
             start_streamer,
             stop_streamer,
+            get_index_chart_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
