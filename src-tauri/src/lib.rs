@@ -8,9 +8,9 @@ pub mod index_chart;
 use db::{init_db, start_tick_writer};
 use settings::{setup_app_folders, load_or_create_config, AppConfig};
 use option_streamer::OptionStreamer;
-use index_tracker::{get_filtered_symbols};
+use index_tracker::{get_filtered_symbols, get_all_index_stats_bulk};
 use index_chart::{fetch_index_chart, ChartDataPoint};
-use indices_streamer::{get_index_cards as get_streamed_index_cards, start_indices_streamer, stop_indices_streamer, IndexCard};
+use indices_streamer::{get_index_cards as get_streamed_index_cards, start_indices_streamer, stop_indices_streamer, seed_index_cache, IndexCard};
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
@@ -186,6 +186,46 @@ async fn get_symbol_info() -> Result<HashMap<String, serde_json::Value>, String>
     }
 }
 
+/// Fetch the initial index cards via the `indices_stats` endpoint and seed the
+/// shared cache used by `get_index_cards`. This is intended to be called once
+/// on app load so cards can be drawn immediately, before/independently of the
+/// `indices_streamer` websocket connecting.
+async fn initialize_index_cards(config: &AppConfig) -> Result<(), String> {
+    let symbol_mapping = get_filtered_symbols(config)
+        .await
+        .map_err(|e| format!("Failed to fetch symbol mapping: {}", e))?;
+
+    let cards = get_all_index_stats_bulk(config)
+        .await
+        .map_err(|e| format!("Failed to fetch initial index stats: {}", e))?;
+
+    // Re-key cards by fno_symbol to match how the live streamer caches them.
+    let mut cards_by_symbol: HashMap<String, IndexCard> = HashMap::new();
+    for card in cards {
+        if let Some(fno_symbol) = symbol_mapping
+            .iter()
+            .find(|(_, mapping)| mapping.short_name == card.index_name)
+            .map(|(fno_symbol, _)| fno_symbol.clone())
+        {
+            cards_by_symbol.insert(
+                fno_symbol,
+                IndexCard {
+                    index_name: card.index_name,
+                    last_price: card.last_price,
+                    change: card.change,
+                    change_percent: card.change_percent,
+                    is_positive: card.is_positive,
+                    dissemination_time: card.dissemination_time,
+                },
+            );
+        }
+    }
+
+    seed_index_cache(cards_by_symbol).await;
+    info!("✅ Initialized index cards from indices_stats endpoint");
+    Ok(())
+}
+
 #[tauri::command]
 async fn get_index_cards() -> Result<Vec<IndexCard>, String> {
     let config = get_config()?;
@@ -240,6 +280,15 @@ pub fn run() {
                 tauri::async_runtime::block_on(async {
                     match get_config() {
                         Ok(config) => {
+                            // Seed the cards from indices_stats first so the UI has
+                            // data to draw immediately on load.
+                            if let Err(e) = initialize_index_cards(&config).await {
+                                eprintln!("❌ Failed to initialize index cards: {}", e);
+                            }
+
+                            // indices_streamer is optional: it only refines/updates
+                            // the cards live while the market is PO/NM (see
+                            // live_update_market_statuses in settings).
                             match start_indices_streamer(&config).await {
                                 Ok(_) => info!("✅ Indices streamer started successfully"),
                                 Err(e) => eprintln!("❌ Failed to start indices streamer: {}", e),

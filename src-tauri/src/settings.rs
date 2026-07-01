@@ -48,6 +48,7 @@ pub struct SystemConfig {
     pub option_ticks: ApiEndpoint,
     pub indices_info: ApiEndpoint,
     pub index_info: ApiEndpoint,
+    pub indices_stats: ApiEndpoint,
     pub index_chart: ApiEndpoint,
     pub historic_index_chart: ApiEndpoint,
     pub indices_streamer: ApiEndpoint,
@@ -114,6 +115,15 @@ impl AppConfig {
                         ApiParam { key: "index".to_string(), value: "NIFTY 50".to_string(), dynamic: true, param_key: Some("index_display_name".to_string()) },
                     ]),
                     desc: "Get high level status for the index".to_string(),
+                    wss: false,
+                },
+                indices_stats: ApiEndpoint {
+                    base: "https://www.nseindia.com/api/NextApi/apiClient".to_string(),
+                    params: Some(vec![
+                        ApiParam { key: "functionName".to_string(), value: "getIndexData".to_string(), dynamic: false, param_key: None },
+                        ApiParam { key: "type".to_string(), value: "All".to_string(), dynamic: false, param_key: None },
+                    ]),
+                    desc: "Get high level status for all indices".to_string(),
                     wss: false,
                 },
                 index_chart: ApiEndpoint {

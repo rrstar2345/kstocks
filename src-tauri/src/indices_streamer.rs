@@ -161,6 +161,10 @@ async fn stream_indices(url: &str, config: &AppConfig) -> Result<()> {
                             }
                         };
                         
+                        // Only apply live streamer updates while the market is in
+                        // pre-open ("PO") or normal-market ("NM") state. Outside of
+                        // these states, the initial `indices_stats` snapshot remains
+                        // the source of truth for the cards.
                         if let Some(ref mapping) = mapping_to_use {
                             // Look up the FNO symbol from streaming index name
                             if let Some(fno_symbol) = mapping.get(&stream_msg.index_name) {
@@ -208,6 +212,17 @@ async fn stream_indices(url: &str, config: &AppConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Seed/replace the index cache with initial data, e.g. from the `indices_stats`
+/// bulk call made on app load. `cards` is keyed by fno_symbol (matching how the
+/// live streamer keys its cache) mapped to the corresponding IndexCard.
+pub async fn seed_index_cache(cards: HashMap<String, IndexCard>) {
+    let mut cache = INDEX_CACHE.write().await;
+    for (fno_symbol, card) in cards {
+        cache.insert(fno_symbol, card);
+    }
+    info!("🌱 Seeded index cache with initial stats");
 }
 
 /// Get all currently cached index cards in the order of valid_symbols

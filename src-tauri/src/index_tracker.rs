@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::settings::AppConfig;
+use crate::indices_streamer::IndexCard;
 
 // ============================================================================
 // DATA STRUCTURES
@@ -29,21 +30,21 @@ pub struct IndicesResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IndexStatData {
     #[serde(rename = "dividentYield")]
-    pub divident_yield: f64,
+    pub divident_yield: Option<f64>,
     #[serde(rename = "ffm")]
-    pub ffm: f64,
+    pub ffm: Option<f64>,
     #[serde(rename = "full")]
-    pub full: f64,
+    pub full: Option<f64>,
     #[serde(rename = "high")]
     pub high: f64,
     #[serde(rename = "icChange")]
-    pub ic_change: f64,
+    pub ic_change: Option<f64>,
     #[serde(rename = "icPerChange")]
-    pub ic_per_change: f64,
+    pub ic_per_change: Option<f64>,
     #[serde(rename = "indexName")]
     pub index_name: String,
     #[serde(rename = "indicativeClose")]
-    pub indicative_close: f64,
+    pub indicative_close: Option<f64>,
     #[serde(rename = "last")]
     pub last: f64,
     #[serde(rename = "low")]
@@ -51,9 +52,9 @@ pub struct IndexStatData {
     #[serde(rename = "open")]
     pub open: f64,
     #[serde(rename = "pbRatio")]
-    pub pb_ratio: f64,
+    pub pb_ratio: Option<f64>,
     #[serde(rename = "peRatio")]
-    pub pe_ratio: f64,
+    pub pe_ratio: Option<f64>,
     #[serde(rename = "percChange")]
     pub perc_change: f64,
     #[serde(rename = "previousClose")]
@@ -61,9 +62,9 @@ pub struct IndexStatData {
     #[serde(rename = "timeVal")]
     pub time_val: String,
     #[serde(rename = "value")]
-    pub value: f64,
+    pub value: Option<f64>,
     #[serde(rename = "volume")]
-    pub volume: f64,
+    pub volume: Option<f64>,
     #[serde(rename = "yearHigh")]
     pub year_high: f64,
     #[serde(rename = "yearHighDt")]
@@ -72,20 +73,15 @@ pub struct IndexStatData {
     pub year_low: f64,
     #[serde(rename = "yearLowDt")]
     pub year_low_dt: Option<String>,
+    #[serde(rename = "constituents")]
+    pub constituents: Option<serde_json::Value>,
+    #[serde(rename = "isConstituents")]
+    pub is_constituents: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IndexStatsResponse {
     pub data: Vec<IndexStatData>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct IndexCard {
-    pub index_name: String,
-    pub last_price: f64,
-    pub change: f64,
-    pub change_percent: f64,
-    pub is_positive: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -250,6 +246,7 @@ pub async fn get_index_stats(fno_symbol: &str, config: &AppConfig) -> Result<Ind
         change: stat.last - stat.previous_close,
         change_percent: stat.perc_change,
         is_positive: stat.perc_change >= 0.0,
+        dissemination_time: stat.time_val.clone(),
     };
 
     info!("📊 Fetched stats for {}: {} ({}%)", 
@@ -258,7 +255,7 @@ pub async fn get_index_stats(fno_symbol: &str, config: &AppConfig) -> Result<Ind
     Ok(card)
 }
 
-/// Fetch stats for all valid symbols in config.
+/// Fetch stats for all valid symbols individually (one request per symbol via index_info).
 pub async fn get_all_index_stats(config: &AppConfig) -> Result<Vec<IndexCard>> {
     let symbols = config.user.valid_symbols.clone();
     let mut cards = Vec::new();
@@ -271,6 +268,66 @@ pub async fn get_all_index_stats(config: &AppConfig) -> Result<Vec<IndexCard>> {
     }
 
     Ok(cards)
+}
+
+/// Fetch stats for all indices in a single bulk request via the `indices_stats` endpoint,
+/// then filter/map down to the app's valid symbols using `indices_short_name` from the
+/// symbol mapping to match against the response's `indexName` field.
+/// This is intended to be used as the initial call on app load to draw the cards,
+/// with `indices_streamer` (websocket) subsequently used only to keep the cards updated
+/// live while the market is in pre-open ("PO") or normal-market ("NM") state.
+pub async fn get_all_index_stats_bulk(config: &AppConfig) -> Result<Vec<IndexCard>> {
+    let symbol_mapping = get_filtered_symbols(config).await?;
+
+    let url = build_url(&config.system.indices_stats.base, &config.system.indices_stats.params, &HashMap::new());
+    let client = reqwest::Client::new();
+
+    let response = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+        .map_err(|e| anyhow!("Failed to fetch bulk indices stats: {}", e))?;
+
+    let data: IndexStatsResponse = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Failed to parse bulk indices stats response: {}", e))?;
+
+    // Build a lookup from indices_short_name -> (fno_symbol, mapping) so we can
+    // match the response's "indexName" field to our valid symbols.
+    let mut short_name_lookup: HashMap<String, String> = HashMap::new();
+    for (fno_symbol, mapping) in symbol_mapping.iter() {
+        short_name_lookup.insert(mapping.short_name.clone(), fno_symbol.clone());
+    }
+
+    let mut cards_by_symbol: HashMap<String, IndexCard> = HashMap::new();
+    for stat in &data.data {
+        if let Some(fno_symbol) = short_name_lookup.get(&stat.index_name) {
+            let card = IndexCard {
+                index_name: stat.index_name.clone(),
+                last_price: stat.last,
+                change: stat.last - stat.previous_close,
+                change_percent: stat.perc_change,
+                is_positive: stat.perc_change >= 0.0,
+                dissemination_time: stat.time_val.clone(),
+            };
+            cards_by_symbol.insert(fno_symbol.clone(), card);
+        }
+    }
+
+    // Return cards ordered per config.user.valid_symbols
+    let mut ordered_cards = Vec::new();
+    for symbol in &config.user.valid_symbols {
+        if let Some(card) = cards_by_symbol.remove(symbol) {
+            ordered_cards.push(card);
+        } else {
+            warn!("⚠️ No bulk stats found for symbol: {}", symbol);
+        }
+    }
+
+    info!("🎯 Fetched initial bulk index stats for {} symbols", ordered_cards.len());
+    Ok(ordered_cards)
 }
 
 /// Clear the cached symbol mapping (useful for manual refresh).
