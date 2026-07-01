@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import type { AppSettings } from "../types/settings";
 
 interface ChartDataPoint {
   timestamp: number;
@@ -29,10 +30,6 @@ interface ChartPoint {
   time: string;
   isPreOpen: boolean;
   originalData: ChartDataPoint;
-}
-
-interface ChartConfig {
-  index_chart_refresh_interval_seconds: number;
 }
 
 const IndexChart: React.FC<IndexChartProps> = ({
@@ -61,20 +58,28 @@ const IndexChart: React.FC<IndexChartProps> = ({
   };
 
   useEffect(() => {
+    // Only 1D data needs live refreshing (intraday, market-hours movement).
+    // Other ranges (1M, 3M, ...) are historical and don't need to be
+    // re-fetched on an interval - just fetch once when selected.
+    const isOneDay = time_range_flag === "1D";
+
     fetchChartData();
 
-    // Set up refresh interval
-    const config = getConfig();
+    if (!isOneDay) {
+      return;
+    }
+
+    // Set up refresh interval using the real value from settings.json.
     let intervalId: ReturnType<typeof setInterval> | undefined;
 
     const setupInterval = async () => {
       try {
-        const cfg = await config;
+        const settings = await invoke<AppSettings>("get_app_settings");
         intervalId = setInterval(() => {
           fetchChartData();
-        }, cfg.index_chart_refresh_interval_seconds * 1000);
+        }, settings.index_chart_refresh_interval_seconds * 1000);
       } catch (error) {
-        console.error("Failed to get config for refresh interval:", error);
+        console.error("Failed to get app settings for refresh interval:", error);
       }
     };
 
@@ -84,14 +89,6 @@ const IndexChart: React.FC<IndexChartProps> = ({
       if (intervalId) clearInterval(intervalId);
     };
   }, [index_display_name, time_range_flag]);
-
-  const getConfig = async () => {
-    // This is a placeholder - the config is fetched from the backend
-    // For now, return default
-    return {
-      index_chart_refresh_interval_seconds: 15,
-    } as ChartConfig;
-  };
 
   const fetchChartData = async () => {
     setLoading(true);
@@ -148,7 +145,7 @@ const IndexChart: React.FC<IndexChartProps> = ({
       return (
         <div
           style={{
-            backgroundColor: "#fff",
+            // backgroundColor: "#fff",
             padding: "8px",
             borderRadius: "4px",
             border: "1px solid #ccc",

@@ -10,7 +10,7 @@ use settings::{setup_app_folders, load_or_create_config, AppConfig};
 use option_streamer::OptionStreamer;
 use index_tracker::{get_filtered_symbols, get_all_index_stats_bulk};
 use index_chart::{fetch_index_chart, ChartDataPoint};
-use indices_streamer::{get_index_cards as get_streamed_index_cards, start_indices_streamer, stop_indices_streamer, seed_index_cache, IndexCard};
+use indices_streamer::{get_index_cards as get_streamed_index_cards, start_indices_streamer, stop_indices_streamer, seed_index_cache, register_app_handle, IndexCard};
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use tracing::{info, error, warn};
+use tauri::Manager;
 
 type ActiveStreams = Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>;
 
@@ -242,12 +243,35 @@ async fn stop_streamer() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn start_streamer() -> Result<String, String> {
+async fn start_streamer(app_handle: tauri::AppHandle) -> Result<String, String> {
     let config = get_config()?;
+    register_app_handle(app_handle).await;
     match start_indices_streamer(&config).await {
         Ok(_) => Ok("Indices streamer started".to_string()),
         Err(e) => Err(format!("Failed to start indices streamer: {}", e))
     }
+}
+
+/// Settings the frontend needs at runtime (refresh/poll intervals, time range
+/// flags, etc.), sourced entirely from settings.json - never hardcoded in the UI.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(crate = "serde")]
+pub struct AppSettings {
+    pub index_chart_refresh_interval_seconds: u64,
+    pub cards_fallback_poll_interval_seconds: u64,
+    pub time_range_flags: Vec<String>,
+    pub default_time_range_flag: String,
+}
+
+#[tauri::command]
+async fn get_app_settings() -> Result<AppSettings, String> {
+    let config = get_config()?;
+    Ok(AppSettings {
+        index_chart_refresh_interval_seconds: config.system.index_chart_refresh_interval_seconds,
+        cards_fallback_poll_interval_seconds: config.system.cards_fallback_poll_interval_seconds,
+        time_range_flags: config.system.time_range_flags.clone(),
+        default_time_range_flag: config.user.default_time_range_flag.clone(),
+    })
 }
 
 #[tauri::command]
@@ -274,10 +298,15 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(|app| {
             // Start the indices streamer on app launch using tauri::async_runtime
-            tauri::async_runtime::spawn_blocking(|| {
+            let app_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
                 tauri::async_runtime::block_on(async {
+                    // Register the AppHandle first so the initial seed below (and
+                    // the live streamer) can push updates to the frontend.
+                    register_app_handle(app_handle).await;
+
                     match get_config() {
                         Ok(config) => {
                             // Seed the cards from indices_stats first so the UI has
@@ -309,6 +338,7 @@ pub fn run() {
             start_streamer,
             stop_streamer,
             get_index_chart_data,
+            get_app_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

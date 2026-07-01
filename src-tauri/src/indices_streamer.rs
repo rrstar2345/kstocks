@@ -6,9 +6,14 @@ use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
 use futures::stream::StreamExt;
 use tracing::{info, warn, error};
+use tauri::{AppHandle, Emitter};
 
 use crate::settings::AppConfig;
 use crate::index_tracker::get_filtered_symbols;
+
+/// Tauri event name emitted whenever a single index card is created/updated
+/// in the cache (from the WebSocket stream or the initial seed).
+pub const INDEX_CARD_UPDATE_EVENT: &str = "index-card-update";
 
 // ============================================================================
 // DATA STRUCTURES
@@ -60,6 +65,20 @@ lazy_static::lazy_static! {
     
     static ref SYMBOL_MAPPING: Arc<RwLock<Option<HashMap<String, String>>>> = 
         Arc::new(RwLock::new(None));
+
+    static ref APP_HANDLE: Arc<RwLock<Option<AppHandle>>> =
+        Arc::new(RwLock::new(None));
+}
+
+/// Emit the given card to the frontend via a Tauri event, if an AppHandle has
+/// been registered (via `start_indices_streamer` or `seed_index_cache`).
+async fn emit_card_update(card: &IndexCard) {
+    let handle_lock = APP_HANDLE.read().await;
+    if let Some(handle) = handle_lock.as_ref() {
+        if let Err(e) = handle.emit(INDEX_CARD_UPDATE_EVENT, card) {
+            warn!("⚠️ Failed to emit {} event: {}", INDEX_CARD_UPDATE_EVENT, e);
+        }
+    }
 }
 
 /// Build a mapping from streaming index names to internal symbol names using indices_info API
@@ -78,7 +97,18 @@ async fn build_symbol_mapping(config: &AppConfig) -> Result<HashMap<String, Stri
     Ok(streaming_to_symbol)
 }
 
+/// Register the AppHandle used to emit real-time card update events to the
+/// frontend. Should be called as early as possible on app startup, before
+/// `seed_index_cache`/`start_indices_streamer`, so no updates are missed.
+pub async fn register_app_handle(app_handle: AppHandle) {
+    let mut app_handle_lock = APP_HANDLE.write().await;
+    *app_handle_lock = Some(app_handle);
+}
+
 /// Start the WebSocket streamer for indices. Spawns a background task.
+/// Requires `register_app_handle` to have been called first so card updates
+/// can be pushed to the frontend, removing the need for the UI to poll on a
+/// fast interval.
 pub async fn start_indices_streamer(config: &AppConfig) -> Result<()> {
     let mut handle_lock = STREAMER_HANDLE.write().await;
     
@@ -179,9 +209,15 @@ async fn stream_indices(url: &str, config: &AppConfig) -> Result<()> {
                                         dissemination_time: stream_msg.dissemination_time.clone(),
                                     };
 
-                                    let mut cache = INDEX_CACHE.write().await;
-                                    cache.insert(fno_symbol.clone(), card.clone());
-                                    
+                                    {
+                                        let mut cache = INDEX_CACHE.write().await;
+                                        cache.insert(fno_symbol.clone(), card.clone());
+                                    }
+
+                                    // Push the update to the frontend immediately instead of
+                                    // relying on the UI to poll for it.
+                                    emit_card_update(&card).await;
+
                                     // info!("📊 Updated {}: {} ({}%)", 
                                     //     stream_msg.index_name, stream_msg.current_price, stream_msg.per_change);
                                 }
@@ -218,10 +254,17 @@ async fn stream_indices(url: &str, config: &AppConfig) -> Result<()> {
 /// bulk call made on app load. `cards` is keyed by fno_symbol (matching how the
 /// live streamer keys its cache) mapped to the corresponding IndexCard.
 pub async fn seed_index_cache(cards: HashMap<String, IndexCard>) {
-    let mut cache = INDEX_CACHE.write().await;
-    for (fno_symbol, card) in cards {
-        cache.insert(fno_symbol, card);
+    {
+        let mut cache = INDEX_CACHE.write().await;
+        for (fno_symbol, card) in cards.iter() {
+            cache.insert(fno_symbol.clone(), card.clone());
+        }
     }
+
+    for card in cards.values() {
+        emit_card_update(card).await;
+    }
+
     info!("🌱 Seeded index cache with initial stats");
 }
 

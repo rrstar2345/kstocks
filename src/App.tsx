@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import IndexChart from "./components/IndexChart";
+import type { AppSettings } from "./types/settings";
 
 type FetchStatus = "idle" | "loading" | "success" | "error";
 
@@ -9,11 +11,6 @@ interface StatusMessage {
   state: FetchStatus;
   message: string;
 }
-
-// interface ExpiryResponse {
-//   expiry_dates: string[];
-//   strike_price: string[];
-// }
 
 interface IndexCard {
   index_name: string;
@@ -38,35 +35,36 @@ function App() {
   const [selectedTimeRange, setSelectedTimeRange] = useState<string>("1M");
   const cardsContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load index cards on component mount
-  useEffect(() => {
-    loadIndexCards();
+  // Shallow-compare two IndexCard arrays (by content, not reference) so we
+  // can skip setState when nothing has actually changed.
+  const cardsEqual = (a: IndexCard[], b: IndexCard[]) => {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i];
+      const y = b[i];
+      if (
+        x.index_name !== y.index_name ||
+        x.last_price !== y.last_price ||
+        x.change !== y.change ||
+        x.change_percent !== y.change_percent ||
+        x.is_positive !== y.is_positive ||
+        x.dissemination_time !== y.dissemination_time
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
 
-    // Start the streamer
-    invoke("start_streamer").catch((error) => {
-      console.error("Failed to start streamer:", error);
-    });
-
-    // Poll for updates every 1 second to get streaming data
-    const interval = setInterval(() => {
-      loadIndexCards();
-    }, 1000);
-
-    return () => {
-      clearInterval(interval);
-      // Stop the streamer when unmounting
-      invoke("stop_streamer").catch((error) => {
-        console.error("Failed to stop streamer:", error);
-      });
-    };
-  }, []);
-
-  const loadIndexCards = async () => {
+  // Full reload of all cards (used for initial load and the sparse fallback
+  // poll). Real-time updates come via the "index-card-update" event instead.
+  const loadIndexCards = useCallback(async () => {
     setCardsLoading(true);
     try {
       const data = await invoke<IndexCard[]>("get_index_cards");
-      console.log("Loaded index cards:", data);
-      setIndexCards(data);
+      // Avoid replacing state (and triggering a re-render / scroll jump)
+      // when the fetched data is identical to what's already shown.
+      setIndexCards((prev) => (cardsEqual(prev, data) ? prev : data));
     } catch (error) {
       console.error("Failed to load index cards:", error);
       setStatus({
@@ -76,20 +74,86 @@ function App() {
     } finally {
       setCardsLoading(false);
     }
-  };
+  }, []);
+
+  // Merge a single updated card into state by key, instead of replacing the
+  // whole array. This avoids re-rendering cards that haven't changed.
+  const mergeIndexCard = useCallback((updated: IndexCard) => {
+    setIndexCards((prev) => {
+      const idx = prev.findIndex((c) => c.index_name === updated.index_name);
+      if (idx === -1) {
+        return [...prev, updated];
+      }
+      const existing = prev[idx];
+      // Skip the state update entirely if nothing actually changed.
+      if (
+        existing.last_price === updated.last_price &&
+        existing.change === updated.change &&
+        existing.change_percent === updated.change_percent &&
+        existing.is_positive === updated.is_positive &&
+        existing.dissemination_time === updated.dissemination_time
+      ) {
+        return prev;
+      }
+      const next = [...prev];
+      next[idx] = updated;
+      return next;
+    });
+  }, []);
+
+  // Load index cards on component mount, subscribe to real-time push updates,
+  // and keep a low-frequency fallback poll as a safety net.
+  useEffect(() => {
+    let fallbackIntervalId: ReturnType<typeof setInterval> | undefined;
+    let unlistenCardUpdate: (() => void) | undefined;
+
+    const setup = async () => {
+      // Seed initial data.
+      await loadIndexCards();
+
+      // Start the streamer (emits "index-card-update" events as data changes).
+      try {
+        await invoke("start_streamer");
+      } catch (error) {
+        console.error("Failed to start streamer:", error);
+      }
+
+      // Subscribe to real-time card updates pushed from the backend.
+      unlistenCardUpdate = await listen<IndexCard>(
+        "index-card-update",
+        (event) => {
+          mergeIndexCard(event.payload);
+        }
+      );
+
+      // Sparse fallback poll, purely as a safety net in case an event is
+      // missed or the stream reconnects. Interval comes from settings.json.
+      try {
+        const settings = await invoke<AppSettings>("get_app_settings");
+        fallbackIntervalId = setInterval(() => {
+          loadIndexCards();
+        }, settings.cards_fallback_poll_interval_seconds * 1000);
+      } catch (error) {
+        console.error("Failed to load app settings for fallback poll:", error);
+      }
+    };
+
+    setup();
+
+    return () => {
+      if (fallbackIntervalId) clearInterval(fallbackIntervalId);
+      if (unlistenCardUpdate) unlistenCardUpdate();
+      // Stop the streamer when unmounting
+      invoke("stop_streamer").catch((error) => {
+        console.error("Failed to stop streamer:", error);
+      });
+    };
+  }, [loadIndexCards, mergeIndexCard]);
 
   const handleCardClick = (index: number) => {
     setSelectedCardIndex(index);
     setSelectedTimeRange("1M"); // Reset to default time range
   };
-
-  // const handlePrevCard = () => {
-  //   setSelectedCardIndex((prev) => (prev === 0 ? indexCards.length - 1 : prev - 1));
-  // };
-
-  // const handleNextCard = () => {
-  //   setSelectedCardIndex((prev) => (prev === indexCards.length - 1 ? 0 : prev + 1));
-  // };
 
   const scrollCards = (direction: "left" | "right") => {
     if (!cardsContainerRef.current) return;
@@ -154,7 +218,7 @@ function App() {
 
   return (
     <main className="container landing">
-      <h1>KSTOCKS</h1>
+      {/* <h1>KSTOCKS</h1> */}
 
       {/* Horizontal Card Carousel */}
       <div className="cards-wrapper">

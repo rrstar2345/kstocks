@@ -43,6 +43,7 @@ pub struct ApiEndpoint {
 pub struct SystemConfig {
     pub time_range_flags: Vec<String>,
     pub index_chart_refresh_interval_seconds: u64,
+    pub cards_fallback_poll_interval_seconds: u64,
     pub market_status_url: ApiEndpoint,
     pub option_info: ApiEndpoint,
     pub option_ticks: ApiEndpoint,
@@ -77,6 +78,7 @@ impl AppConfig {
                     "20Y".to_string(), "25Y".to_string(), "30Y".to_string(),
                 ],
                 index_chart_refresh_interval_seconds: 15,
+                cards_fallback_poll_interval_seconds: 30,
                 market_status_url: ApiEndpoint {
                     base: "https://www.nseindia.com/api/marketStatus".to_string(),
                     params: None,
